@@ -621,11 +621,12 @@ class MyrientApp(ctk.CTk):
                 region=self.region_var.get() if self.region_var.get() != "all" else None,
                 language=self.language_var.get() if self.language_var.get() != "all" else None,
                 version=self.version_var.get() if self.version_var.get() != "all" else None,
-                title_contains=self.title_entry.get(),
-                title_regex=self.regex_search_var.get(),
+                title_contains=self.title_entry.get() if not self.regex_search_var.get() else None,
+                title_regex=self.title_entry.get() if self.regex_search_var.get() else None,
                 offset=self.current_offset,
                 limit=limit
             )
+
 
             def update_ui():
                 # Clear Treeview and URL list before inserting new results

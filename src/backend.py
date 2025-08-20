@@ -1,3 +1,4 @@
+import re
 import sqlite3
 import typing
 from typing import List, Optional, Dict
@@ -12,7 +13,20 @@ class MyrientBackend:
     def get_conn(self):
         conn = sqlite3.connect(self.DB_FILE)
         conn.row_factory = sqlite3.Row
-        return conn
+
+        def regexp(pattern, text):
+            try:
+                if not pattern or text is None:
+                    return 0
+                return 1 if re.search(pattern, str(text), re.IGNORECASE) else 0
+            except Exception as e:
+                print(f"REGEXP error: pattern={pattern!r}, text={text!r}, error={e}")
+                return 0
+
+        conn.create_function("REGEXP", 2, regexp)
+
+        return conn    
+
 
     # -------------------------
     # Advanced search interface
@@ -41,19 +55,28 @@ class MyrientBackend:
         if title_contains and not title_regex:
             base_query += " AND title LIKE ?"
             params.append(f"%{title_contains}%")
+
+        if title_regex:
+            base_query += " AND title REGEXP ?"
+            params.append(title_regex)
+
         if ext:
             ext = ext.lower().lstrip(".")
             base_query += " AND LOWER(url) LIKE ?"
             params.append(f"%.{ext}")
+
         if min_size is not None:
             base_query += " AND size >= ?"
             params.append(min_size)
+
         if max_size is not None:
             base_query += " AND size <= ?"
             params.append(max_size)
+
         if modified_after:
             base_query += " AND DATE(last_modified) >= DATE(?)"
             params.append(modified_after)
+
         if modified_before:
             base_query += " AND DATE(last_modified) <= DATE(?)"
             params.append(modified_before)
@@ -61,18 +84,23 @@ class MyrientBackend:
         # Apply main search filters
         main_query = "SELECT * " + base_query
         main_params = list(params)
+
         if platform:
             main_query += " AND platform = ?"
             main_params.append(platform)
+
         if region:
             main_query += " AND region = ?"
             main_params.append(region)
+
         if version:
             main_query += " AND version = ?"
             main_params.append(version)
+
         if language:
             main_query += " AND ',' || language || ',' LIKE ?"
             main_params.append(f"%,{language},%")
+
         main_query += " ORDER BY title LIMIT ? OFFSET ?"
         main_params.extend([limit, offset])
 
