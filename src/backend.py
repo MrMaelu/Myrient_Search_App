@@ -1,4 +1,3 @@
-import re
 import sqlite3
 import typing
 from typing import List, Optional, Dict

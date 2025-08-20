@@ -6,7 +6,6 @@ import threading
 import queue
 import urllib.parse
 from urllib.parse import unquote
-import requests
 
 class Downloader:
     def __init__(self, output_dir, max_file_workers=4):
