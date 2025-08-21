@@ -19,13 +19,22 @@ class Downloader:
         self.download_queue = queue.Queue()
         self.processes = []
         self.cancel_flag = threading.Event()
-
+        self.download_running = False
 
     def _download_file(self, file_idx, url, progress_callback):
         filename = unquote(os.path.basename(url))
         filepath = os.path.join(self.output_dir, filename)
+        wget_args = [
+            "-m",
+            "-np",
+            "-c",
+            "-e", "robots=off",
+            "-R", "index.html*",
+            "--progress=dot:mega",
+            "-O", filepath
+        ]
 
-        cmd = [self.wget_binary, "-O", filepath, "--progress=dot:mega", url]
+        cmd = [self.wget_binary] + wget_args + [url]
 
         creationflags = 0
         if sys.platform == "win32":
@@ -72,12 +81,16 @@ class Downloader:
 
 
     def start(self, progress_callback, done_callback):
+        if self.download_running:
+            return
+
         total_files = self.download_queue.qsize()
         completed_files = 0
         file_idx_counter = 0
         lock = threading.Lock()
 
         def worker():
+            self.download_running = True
             nonlocal completed_files, file_idx_counter
             while not self.cancel_flag.is_set():
                 try:
@@ -90,6 +103,7 @@ class Downloader:
                     file_idx_counter += 1
 
                 self._download_file(idx, url, progress_callback)
+                total_files = self.download_queue.qsize()
 
                 with lock:
                     completed_files += 1
@@ -106,9 +120,12 @@ class Downloader:
 
         self.download_queue.join()
 
+        self.download_running = False
+
 
     def add_url(self, url):
         self.download_queue.put(url)
+        return self.download_queue.qsize()
 
 
     def all_stopped(self):
@@ -136,3 +153,4 @@ class Downloader:
                 print(f"Deleting {filepath}")
         except Exception as e:
             print(f"Failed to clean up file: {filepath}: {e}")
+

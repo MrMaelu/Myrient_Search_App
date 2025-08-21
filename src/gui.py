@@ -388,6 +388,10 @@ class MyrientApp(ctk.CTk):
         self.cancel_button.grid(row=row, column=3, sticky="ew", padx=self.padx, pady=self.pady)
         self.cancel_button.configure(state="disabled")
 
+# Column 4: Show queue button
+        self.queue_button = ctk.CTkButton(self.download_frame, text="Show queue", command=self.show_queue)
+        self.queue_button.grid(row=row, column=4, sticky="ew", padx=self.padx, pady=self.pady)
+
 # Column 5: Repair database button
         self.repair_db_button = ctk.CTkButton(self.download_frame, text="Repair DB", command=self.repair_db)
         self.repair_db_button.grid(row=row, column=5, sticky="ew", padx=self.padx, pady=self.pady)
@@ -525,9 +529,12 @@ class MyrientApp(ctk.CTk):
     def show_url(self, event):
         selected_iids = self.results_tree.selection()
         for iid in selected_iids:
-            url = self.result_urls[iid]
-            clean_url = unquote(url.replace(self.BASE_URL, ''))
-            self.status_label.configure(text=clean_url)
+            try:
+                url = self.result_urls[iid]
+                clean_url = unquote(url.replace(self.BASE_URL, ''))
+                self.status_label.configure(text=clean_url)
+            except KeyError as e:
+                pass
 
     def select_folder(self):
         directory = ctk.filedialog.askdirectory()
@@ -681,36 +688,32 @@ class MyrientApp(ctk.CTk):
 # Download
 
     def start_download(self):
-            self.disable_all_except_one(self.cancel_button)
-
             download_dir = self.download_dir.get() or "downloads"
             download_dir = download_dir.replace("\\", "/")
-            self.downloader = Downloader(output_dir=download_dir)
-
-            selected_items = self.results_tree.selection()
-            if not selected_items:
-                self.status_label.configure(text="Select one or more items to download")
-                return
-            else:
-                plural = "s" if len(selected_items) > 1 else ""
-                self.status_label.configure(text=f"Downloading {len(selected_items)} file" + plural)
-
-            self.progress_update_delay = self.downloader.max_file_workers * 10
+            if not self.downloader:
+                self.downloader = Downloader(output_dir=download_dir)
 
             urls_to_download = self.get_urls_from_selection()
 
-            # Clear the downloader queue and add URLs
-            self.downloader.download_queue.empty()
             for url in urls_to_download:
-                self.downloader.add_url(url)
+                queue_size = self.downloader.add_url(url)
+
+            if queue_size:
+                self.status_label.configure(text="Select one or more items to download")
+                return
+            else:
+                plural = "s" if queue_size > 1 else ""
+                self.status_label.configure(text=f"Downloading {queue_size} file" + plural)
+
+            if self.downloader.download_running:
+                return
 
             self.ensure_progress_labels(self.downloader.max_file_workers)
             self.reset_progress_labels()
 
-            self.download_button.configure(state="disabled")
+            self.progress_update_delay = self.downloader.max_file_workers * 10
+
             self.cancel_button.configure(state="normal")
-            self.search_button.configure(state="disabled")
-            self.update_button.configure(state="disabled")
 
             self.download_start_time = time()
 
@@ -721,6 +724,7 @@ class MyrientApp(ctk.CTk):
                 self.progress_queue.put((file_idx, progress_text, downloaded_bytes >= total_bytes, percent))
 
             def done_callback(completed_files, total_files):
+                self.downloader.download_running = False
                 elapsed = time() - self.download_start_time
                 self.progress_queue.put(("done", completed_files, total_files, elapsed))
                 self.enable_all_widgets()
@@ -732,10 +736,22 @@ class MyrientApp(ctk.CTk):
                 daemon=True
             ).start()
 
+
     def stop_download(self):
             if self.downloader: self.downloader.cancel_all()
             self.enable_all_widgets()
 
+
+    def show_queue(self):
+        if self.downloader:
+            queue_items = list(self.downloader.download_queue.queue)
+            for i in self.results_tree.get_children():
+                self.results_tree.delete(i)
+
+            if queue_items:
+                for item in queue_items:
+                    cleaned_item = unquote(item.replace(self.BASE_URL, ''))
+                    self.results_tree.insert("", 0, values=[cleaned_item,])
 
 
 # Labels and progress
