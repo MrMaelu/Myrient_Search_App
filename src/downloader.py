@@ -1,19 +1,26 @@
+"""Downloader for the Myrient Search App."""
+import contextlib
+import queue
+import re
 import subprocess
 import sys
-import os
-import re
 import threading
-import queue
-import urllib.parse
-from urllib.parse import unquote
+from collections.abc import Callable
+from pathlib import Path
+from urllib.parse import unquote, urlparse
+
 
 class Downloader:
-    def __init__(self, output_dir, max_file_workers=4):
-        dir_path = os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else __file__)
+    """Downloader class for the Myrient Search App."""
 
-        self.wget_binary = os.path.join(dir_path, 'wget.exe')
-        self.output_dir = output_dir
-        os.makedirs(self.output_dir, exist_ok=True)
+    def __init__(self, output_dir:str, max_file_workers:int=4) -> None:
+        """Initialize variables."""
+        dir_path = Path(
+            sys.executable if getattr(sys, "frozen", False) else __file__).parent
+
+        self.wget_binary = Path(dir_path, "wget.exe")
+        self.output_dir = Path(output_dir)
+        Path.mkdir(self.output_dir, parents=True, exist_ok=True)
 
         self.max_file_workers = max_file_workers
         self.download_queue = queue.Queue()
@@ -21,9 +28,16 @@ class Downloader:
         self.cancel_flag = threading.Event()
         self.download_running = False
 
-    def _download_file(self, file_idx, url, progress_callback):
-        filename = unquote(os.path.basename(url))
-        filepath = os.path.join(self.output_dir, filename)
+
+    def _download_file(self,
+                       file_idx:str,
+                       url:str,
+                       progress_callback:Callable|None,
+                       )-> None:
+        """Start a wget process to download a single file."""
+        parsed = urlparse(url)
+        filename = Path(unquote(parsed.path)).name
+        filepath = Path(self.output_dir, filename)
         wget_args = [
             "-m",
             "-np",
@@ -31,22 +45,21 @@ class Downloader:
             "-e", "robots=off",
             "-R", "index.html*",
             "--progress=dot:mega",
-            "-O", filepath
+            "-O", filepath,
         ]
 
-        cmd = [self.wget_binary] + wget_args + [url]
+        cmd = [self.wget_binary, *wget_args, url]
 
         creationflags = 0
         if sys.platform == "win32":
             creationflags = subprocess.CREATE_NO_WINDOW
 
-        process = subprocess.Popen(
+        process = subprocess.Popen(  # noqa: S603
             cmd,
-            #stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
-            creationflags=creationflags
+            creationflags=creationflags,
         )
         self.processes.append(process)
 
@@ -73,14 +86,23 @@ class Downloader:
             process.wait()
             if not self.cancel_flag.is_set():
                 process_finished = True
-                progress_callback(file_idx, url, total_bytes or downloaded_bytes, total_bytes or downloaded_bytes)
+                progress_callback(
+                    file_idx,
+                    url,
+                    total_bytes or downloaded_bytes,
+                    total_bytes or downloaded_bytes,
+                    )
 
         finally:
             if not process_finished:
                 self.clean_up_partial_files(filepath)
 
 
-    def start(self, progress_callback, done_callback):
+    def start(self,
+              progress_callback:Callable|None,
+              done_callback:Callable|None,
+              ) -> None:
+        """Start the downloading process."""
         if self.download_running:
             return
 
@@ -89,7 +111,7 @@ class Downloader:
         file_idx_counter = 0
         lock = threading.Lock()
 
-        def worker():
+        def worker() -> None:
             self.download_running = True
             nonlocal completed_files, file_idx_counter
             while not self.cancel_flag.is_set():
@@ -123,16 +145,19 @@ class Downloader:
         self.download_running = False
 
 
-    def add_url(self, url):
+    def add_url(self, url:str) -> int:
+        """Add a new URL to the download queue."""
         self.download_queue.put(url)
         return self.download_queue.qsize()
 
 
-    def all_stopped(self):
+    def all_stopped(self) -> bool:
+        """Check if the download queue is empty."""
         return self.download_queue.empty()
 
 
-    def cancel_all(self):
+    def cancel_all(self) -> None:
+        """Cancel all current downloads."""
         self.cancel_flag.set()
         while not self.download_queue.empty():
             try:
@@ -140,17 +165,18 @@ class Downloader:
             except queue.Empty:
                 break
         for p in self.processes:
-            try:
+            with contextlib.suppress(Exception):
                 p.terminate()
-            except Exception:
-                pass
 
 
-    def clean_up_partial_files(self, filepath):
+    def clean_up_partial_files(self, filepath:str) -> None:
+        """Remove unfinished downloads."""
+        path = Path(filepath)
         try:
-            if os.path.exists(filepath):
-                os.remove(filepath)
-                print(f"Deleting {filepath}")
-        except Exception as e:
-            print(f"Failed to clean up file: {filepath}: {e}")
-
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except PermissionError:
+            pass
+        except OSError:
+            pass
