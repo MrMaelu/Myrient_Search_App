@@ -27,6 +27,8 @@ class Downloader:
         self.processes = []
         self.cancel_flag = threading.Event()
         self.download_running = False
+        self.file_idx_counter = 0
+        self.lock = threading.Lock()
 
 
     def _download_file(self,
@@ -37,7 +39,7 @@ class Downloader:
         """Start a wget process to download a single file."""
         parsed = urlparse(url)
         filename = Path(unquote(parsed.path)).name
-        filepath = Path(self.output_dir, filename)
+        filepath = Path(self.output_dir, filename + ".incomplete")
         wget_args = [
             "-m",
             "-np",
@@ -86,6 +88,7 @@ class Downloader:
             process.wait()
             if not self.cancel_flag.is_set():
                 process_finished = True
+                Path.rename(filepath, Path(self.output_dir, filename))
                 progress_callback(
                     file_idx,
                     url,
@@ -100,54 +103,38 @@ class Downloader:
 
     def start(self,
               progress_callback:Callable|None,
-              done_callback:Callable|None,
               ) -> None:
         """Start the downloading process."""
         if self.download_running:
             return
 
-        total_files = self.download_queue.qsize()
-        completed_files = 0
-        file_idx_counter = 0
-        lock = threading.Lock()
+        self.download_running = True
 
         def worker() -> None:
-            self.download_running = True
-            nonlocal completed_files, file_idx_counter
             while not self.cancel_flag.is_set():
                 try:
-                    url = self.download_queue.get_nowait()
+                    idx, url = self.download_queue.get(timeout=1)
                 except queue.Empty:
-                    break
+                    if not self.download_running and self.download_queue.empty():
+                        break
+                    continue
 
-                with lock:
-                    idx = file_idx_counter
-                    file_idx_counter += 1
-
-                self._download_file(idx, url, progress_callback)
-                total_files = self.download_queue.qsize()
-
-                with lock:
-                    completed_files += 1
-                    if completed_files == total_files:
-                        done_callback(completed_files, total_files)
-
-                self.download_queue.task_done()
+                if not self.cancel_flag.is_set():
+                    self._download_file(idx, url, progress_callback)
+                    self.download_queue.task_done()
 
         threads = []
-        for _ in range(min(self.max_file_workers, total_files)):
+        for _ in range(self.max_file_workers):
             t = threading.Thread(target=worker, daemon=True)
             threads.append(t)
             t.start()
 
-        self.download_queue.join()
-
-        self.download_running = False
-
 
     def add_url(self, url:str) -> int:
         """Add a new URL to the download queue."""
-        self.download_queue.put(url)
+        with self.lock:
+            self.download_queue.put((self.file_idx_counter, url))
+            self.file_idx_counter += 1
         return self.download_queue.qsize()
 
 

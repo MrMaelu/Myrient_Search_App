@@ -14,3 +14,6 @@ bin
 # Application specific
 *myrient_index.db*
 *.spec
+uv.lock
+serve.py
+test.py

@@ -1,5 +1,6 @@
 """Web crawler for Myrient Search App."""
 import concurrent.futures
+import configparser
 import contextlib
 import re
 import shutil
@@ -9,11 +10,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Queue
-from time import time
 from urllib.parse import unquote
 
 import requests
 from lxml import html
+
+from config_defaults import ConfigDefaults
+
+last_base_folder = ""
 
 
 @dataclass
@@ -51,14 +55,28 @@ class CrawlContext:
         return self.thread_local.conn
 
 
-ignored_base_folders = [
-    #'Internet Archive',
-    "Miscellaneous",
-    #'No-Intro',
-    #'TOSEC-ISO',
+_ignored_base_folders = [
+    #"who_lee",
+    #"RetroAchievements",
+    #"T-En Collection",
+    #"Total DOS Collection",
+    #"Internet Archive",
+    #"No-Intro",
+    #"TOSEC-ISO",
+    #"TOSEC",
+    #"Redump",
+
     "TOSEC-PIX",
-    #'TOSEC',
-    #'Redump',
+    "Miscellaneous",
+    "Touhou Project Collection",
+    "bitsavers",
+    "eXo",
+    "TeknoParrot",
+    "FinalBurn Neo",
+    "HBMAME",
+    "Hardware Target Game Database",
+    "Lost Level",
+    "MAME",
     "96x65pixels",
     "EBZero",
     "Unknown",
@@ -83,13 +101,12 @@ ignored_base_folders = [
     "superbio",
     "teamgt19",
     "the_last_collector",
-    #'who_lee',
     "yahweasel",
 ]
 
-ignored_base_folders = [folder.lower() for folder in ignored_base_folders]
+_ignored_base_folders = [folder.lower() for folder in _ignored_base_folders]
 
-ignored_folders = [
+_ignored_folders = [
     "audio cd",
     "bd-video",
     "dvd-video",
@@ -134,10 +151,10 @@ ignored_folders = [
     "cheat disc",
 ]
 
-ignored_folders = [folder.lower() for folder in ignored_folders]
+_ignored_folders = [folder.lower() for folder in _ignored_folders]
 
 # Known aliases → canonical names
-platform_aliases = {
+_platform_aliases = {
     # Apple
     "apple 1": "Apple I",
     "apple i": "Apple I",
@@ -176,9 +193,72 @@ platform_aliases = {
     # IBM
     "ibm pc compatible": "IBM PC Compatible",
     "ibm pc and compatibles": "IBM PC Compatible",
-    "IBM PC Compatible SBI Subchannels": "IBM PC Compatible",
-    "IBM PC Compatibles": "IBM PC Compatible",
+    "ibm pc compatibles": "IBM PC Compatible",
 }
+
+
+# Set up ignored folders and aliases from config
+defaults = ConfigDefaults()
+config = configparser.ConfigParser()
+
+config_path = Path("config.ini")
+
+if Path.exists(config_path):
+    config.read(config_path)
+else:
+    config.add_section("ignored_base_folders")
+    config["ignored_base_folders"] = {
+        "items": "\n" + "\n".join(defaults.IGNORED_BASE_FOLDERS),
+        }
+
+    config.add_section("ignored_folders")
+    config["ignored_folders"] = {
+        "items": "\n" + "\n".join(defaults.IGNORED_FOLDERS),
+        }
+
+    config.add_section("platform_aliases")
+    config["platform_aliases"] = defaults.PLATFORM_ALIASES.copy()
+
+    with Path.open(config_path, "w", encoding="utf-8") as f:
+        config.write(f)
+
+ignored_base_folders = config["ignored_base_folders"]["items"].split("\n")
+ignored_base_folders = [folder.lower() for folder in ignored_base_folders if folder]
+
+ignored_folders = config["ignored_folders"]["items"].split("\n")
+ignored_folders = [folder.lower() for folder in ignored_folders if folder]
+
+platform_aliases = dict(config["platform_aliases"])
+
+
+
+"""
+print(ignored_base_folders)
+print(new_ignored_base_folders)
+if ignored_base_folders == new_ignored_base_folders:
+    print("Identical")
+else:
+    print("Unique")
+print("")
+
+print(ignored_folders)
+print(new_ignored_folders)
+if ignored_folders == new_ignored_folders:
+    print("Identical")
+else:
+    print("Unique")
+print("")
+
+print(platform_aliases)
+print(new_platform_aliases)
+if platform_aliases == new_platform_aliases:
+    print("Identical")
+else:
+    print("Unique")
+print("")
+"""
+
+
 
 
 # Main crawler
@@ -237,22 +317,14 @@ def crawl_and_index(
     processed = 0
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-        crawl_start = time()
         while not ctx.folder_queue.empty():
-            batch_start = time()
             current_batch, processed = _get_batch(ctx, processed)
             if not current_batch:
                 break
             _process_batch(executor, ctx, current_batch)
 
             if progress_callback:
-                batch_time = time() - batch_start
-                total_time = time() - crawl_start
-                progress_callback("-" * 50)
-                progress_callback(f"Batch time: {round(batch_time, 2)}")
-                progress_callback(f"Total time: {round(total_time, 2)}")
                 progress_callback(f"{processed} folders processed.")
-                progress_callback("-" * 50)
 
     if hasattr(ctx.thread_local, "conn"):
         ctx.thread_local.conn.close()
@@ -402,12 +474,14 @@ def rescan_database(db_path:str, base_url:str, progress_callback:Callable|None) 
 
             if i % 100 == 0:
                 conn.commit()
-                progress_callback(i, total)
+                if progress_callback:
+                    progress_callback(i, total)
 
         delete_ignored_platforms(conn, progress_callback)
 
         conn.commit()
-        progress_callback("Rescan and update complete.", "")
+        if progress_callback:
+            progress_callback("Rescan and update complete.", "")
 
     except sqlite3.Error:
         conn.rollback()
@@ -415,56 +489,72 @@ def rescan_database(db_path:str, base_url:str, progress_callback:Callable|None) 
         conn.close()
 
 # Helper functions
-def delete_ignored_platforms(conn:sqlite3.Connection,
-                             progress_callback:Callable|None,
-                             batch_size:int=500) -> None:
+def delete_ignored_platforms(conn: sqlite3.Connection,
+                             progress_callback: Callable | None,
+                             batch_size: int = 500) -> None:
     """Delete ignored platforms after DB repair."""
     c = conn.cursor()
 
+    # Register REGEXP function on this connection
+    def regexp(pattern: str, text: str) -> int:
+        try:
+            if not pattern or text is None:
+                return 0
+            return 1 if re.search(pattern, str(text), re.IGNORECASE) else 0
+        except re.error:
+            return 0
+
+    conn.create_function("REGEXP", 2, regexp)
+
     ignored = ignored_base_folders + ignored_folders
-    patterns = [f"%{p}%" for p in ignored]
 
-    url_conditions = " OR ".join(["LOWER(url) LIKE ?"] * len(patterns))
-    platform_conditions = " OR ".join(["LOWER(platform) LIKE ?"] * len(patterns))
-    title_conditions = " OR ".join(["LOWER(title) LIKE ?"] * len(patterns))
+    # Build WHERE clause
+    matching_ids = []
 
-    where_clause = (
-        f"({url_conditions}) OR ({platform_conditions}) OR ({title_conditions})"
-        )
-    params = patterns * 3
+    for pattern in ignored:
+        pattern_like = f"%{pattern}%"
+        c.execute("""
+            SELECT rowid FROM files
+            WHERE LOWER(url) LIKE ?
+               OR LOWER(platform) LIKE ?
+               OR LOWER(title) LIKE ?
+        """, (pattern_like, pattern_like, pattern_like))
+        matching_ids.extend([row[0] for row in c.fetchall()])
 
-    # Get matching row IDs first
-    c.execute(f"SELECT rowid FROM files WHERE {where_clause}", params)  # noqa: S608
-    matching_ids = [row[0] for row in c.fetchall()]
+    # Add random pattern matches
+    c.execute(
+        "SELECT rowid FROM files WHERE title REGEXP "
+        "'^(?:\\d{8,}|[0-9A-Za-z]{8,}(?![A-Za-z]{4,}))$'",
+    )
+
+    matching_ids.extend([row[0] for row in c.fetchall()])
+
+    # Remove duplicates and sort
+    matching_ids = sorted(set(matching_ids))
     total = len(matching_ids)
+
+    if total == 0:
+        return
 
     deleted = 0
     while matching_ids:
         batch_ids = matching_ids[:batch_size]
         matching_ids = matching_ids[batch_size:]
 
-        # Delete current batch
         placeholders = ",".join("?" for _ in batch_ids)
         c.execute(f"DELETE FROM files WHERE rowid IN ({placeholders})", batch_ids)  # noqa: S608
 
         deleted += len(batch_ids)
         if progress_callback:
-            progress_callback(deleted, total)
+            progress_callback(f"Deleted {deleted}/{total} files")
 
+    conn.commit()
     if progress_callback:
-        progress_callback("Ignored platform deletion complete.", "")
+        progress_callback(f"Deletion complete: {deleted} files removed")
 
 
 def normalize_platform_name(platform:str) -> str:
     """Replace aliases (case-insensitive)."""
-    lower_platform = platform.lower()
-    for alias, canonical in platform_aliases.items():
-        if alias in lower_platform:
-            # Simple case-insensitive replacement
-            pattern = re.compile(re.escape(alias), re.IGNORECASE)
-            platform = pattern.sub(canonical, platform)
-            break
-
     # Remove text after '(' and split on ' - '
     parts = platform.split("(")[0].split(" - ")
     parts = [p.strip() for p in parts]
@@ -478,11 +568,17 @@ def normalize_platform_name(platform:str) -> str:
             tokens.append(word)
         prev_word = lw
 
-    # Remove 'non-redump' from platform name
+    # Remove ignored names from platform name
     cleaned_tokens = [token for token in tokens if token.lower() not in ignored_folders]
 
-    normalized = " ".join(cleaned_tokens).strip()
-    return normalized.title()
+    clean_platform = " ".join(cleaned_tokens).strip()
+
+    for alias, canonical in platform_aliases.items():
+        if alias.lower() in clean_platform.lower():
+            clean_platform = canonical
+            break
+
+    return clean_platform.title()
 
 def fetch_folder_listing(url:str) -> list:
     """Fetch folder contents from URL."""
@@ -500,7 +596,7 @@ def fetch_folder_listing(url:str) -> list:
             name = href[0]
             size_text = size[0].strip() if size else None
             date_text = date[0].strip() if date else None
-            if name != "../":
+            if name not in {"../", "./"} and "/./" not in unquote(url):
                 entries.append({
                     "name": name,
                     "size": size_text,
@@ -511,26 +607,39 @@ def fetch_folder_listing(url:str) -> list:
 
 def parse_metadata_from_path(url_path:str, base_url:str) -> dict|None:
     """Parse metadata from the full url."""
-    if not url_path.endswith(".zip"):
+    if not url_path.endswith((".zip", ".chd", ".iso")) or "/./" in url_path:
         return None
 
     parts = url_path.strip("/").split("/")
 
-    if "tosec" in url_path.lower() and "games" in url_path.lower():
-        platform_raw = f"{parts[1]} - {parts[2]}"
-    elif "who_lee" in unquote(url_path.lower()):
-        platform_raw = parts[3]
-    else:
-        platform_raw = parts[1]
+    platform_raw = _process_platform(url_path, parts)
+    if not platform_raw:
+        return None
 
     collection = unquote(parts[0])
-    platform_raw = unquote(platform_raw)
     filename = unquote(parts[-1])
     title = filename
 
     # Remove extension from title
     if "." in filename:
         title = filename.rsplit(".", 1)[0]
+
+    # Strip metadata for ID detection
+    title_token = re.sub(r"\s*\([^)]*\)", "", title).strip()
+
+    def looks_like_random_id(name: str) -> bool:
+        # Treat 8 or more numbers an ID
+        if re.fullmatch(r"\d{8,}", name):
+            return True
+        # Try to filter out random hash names or similar
+        # If it starts with 4+ letters, consider it a real word/name
+        if re.fullmatch(r"[0-9A-Za-z]{8,}", name):
+            return not re.search(r"^[A-Za-z]{4,}", name)
+        return False
+
+    if looks_like_random_id(title_token):
+        print(title_token, "looks like random")
+        return None
 
     # Extract metadata from title parentheses
     meta_parts = re.findall(r"\(([^)]+)\)", title)
@@ -543,8 +652,8 @@ def parse_metadata_from_path(url_path:str, base_url:str) -> dict|None:
 
     region = _extract_region(meta_parts)
     languages = _extract_languages(meta_parts)
-    version = _extract_version(meta_parts, parts, platform_raw)
-    platform = normalize_platform_name(platform_raw)
+    version = _extract_version(meta_parts, parts, unquote(platform_raw))
+    platform = normalize_platform_name(unquote(platform_raw))
 
     # Remove duplicates from languages
     seen_langs = set()
@@ -565,7 +674,34 @@ def parse_metadata_from_path(url_path:str, base_url:str) -> dict|None:
     }
 
 
+def _process_platform(url_path:str, parts: list) -> str:
+    platform = parts[1]
+    if "tosec" in url_path.lower() and "games" in url_path.lower():
+        platform = f"{parts[1]} - {parts[2]}"
+
+    elif "who_lee" in unquote(url_path.lower()):
+        platform = parts[3]
+
+    elif "retroachievements" in url_path.lower():
+        platform = parts[1].split("-")[1].strip()
+
+    elif "T-En Collection".lower() in unquote(url_path).lower():
+        platform = unquote(parts[1]).replace(" [T-En] Collection", "")
+        manufacturer = platform.split("-")[0].strip()
+        device = platform.split("-")[1].strip()
+        platform = manufacturer + " " + device
+
+    elif "Total DOS Collection".lower() in unquote(url_path).lower():
+        if "games/files" in url_path.lower():
+            platform = "MS DOS"
+        return None
+
+    return platform
+
+
+
 def _extract_region(meta_parts: list[str]) -> str | None:
+    """Extract region from metadata."""
     regions = {
         "us", "eu", "jp", "pal", "europe", "usa", "japan", "ntsc", "china", "korea",
         }
@@ -573,6 +709,7 @@ def _extract_region(meta_parts: list[str]) -> str | None:
         if p.lower() in regions:
             return p.upper()
     return None
+
 
 
 def _extract_languages(meta_parts: list[str]) -> list[str]:

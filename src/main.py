@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 from typing import Final
 
-import gui
+import tui
 
 BASE_URL: Final[str] = "https://myrient.erista.me/files/"
 DB_FILE: Final[Path] = Path("myrient_index.db")
@@ -21,10 +21,11 @@ def main() -> None:
     db_file: Path = base_dir / DB_FILE
     download_dir: Path = base_dir / DOWNLOAD_DIR
 
-    # Run GUI
-    app: gui.MyrientApp = gui.MyrientApp(BASE_URL, db_file, download_dir)
-    app.mainloop()
+    # Run TUI
+    app = tui.MyrientTUI(BASE_URL, db_file, download_dir)
+    app.run()
 
 
 if __name__ == "__main__":
     main()
+
