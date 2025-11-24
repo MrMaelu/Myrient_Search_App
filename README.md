@@ -2,48 +2,27 @@
 
 ## Description
 
-Myrient Search App is a GUI application that allows users to search and download files from [Myrient](https://myrient.erista.me/).
+Myrient Search App is a TUI application that allows users to search and download files from [Myrient](https://myrient.erista.me/).
 
-## Installation
+Searches are done in a local database to improve performance, so occational update is needed.
 
-1.  Make sure you have Python 3.12 or higher installed.
-2.  Clone this repository.
-3.  Install the dependencies using pip:
+This is not done automatically.
 
-    ```bash
-    pip install -r requirements.txt
-    ```
 
-    or using uv:
+## Screenshot
 
-    ```bash
-    uv pip install -r requirements.txt
-    ```
+<img src="https://i.ibb.co/hTp428Q/Skjermbilde-2025-11-24-205923.png">
 
-## Usage
 
-1.  Run the GUI application:
+## Requirements
 
-    ```bash
-    python src/main.py
-    ```
+### wget
+- You will need wget for downloading. Place it in the src folder or next to the executable if you package with pyinstaller or similar.
 
-2.  The application window will appear, allowing you to search for files based on various criteria (platform, region, language, etc.).
-3.  Select the desired files and download them to your local machine.
-
-## Dependencies
-
-*   customtkinter
-*   lxml
-*   requests
 
 ## License
 
 This project is unlicensed.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit pull requests or open issues for any bugs or feature requests.
 
 ## Credits
 
