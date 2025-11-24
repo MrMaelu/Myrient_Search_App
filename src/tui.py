@@ -185,8 +185,6 @@ class MyrientTUI(App):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button press events."""
         if event.button.id == "search_button":
-            results_table = self.query_one(DataTable)
-            results_table.clear()
             self.do_search()
         elif event.button.id == "load_more_button":
             results_table = self.query_one(DataTable)
@@ -198,6 +196,17 @@ class MyrientTUI(App):
             self.stop_downloads()
         elif event.button.id == "update_button":
             self.update_db(progress_callback=self.db_progress_handler)
+        elif event.button.id == "reset_button":
+            self.query_one("#search_input", Input).value = ""
+            self.query_one("#results_per_page_input", Input).value = "100"
+            self.query_one("#platform_select", Select).value = "all"
+            self.query_one("#region_select", Select).value = "all"
+            self.query_one("#language_select", Select).value = "all"
+            self.query_one("#version_select", Select).value = "all"
+            self.query_one("#size_select", Select).value = "all"
+            self.do_search()
+
+
 
 
     def on_data_table_header_selected(
@@ -411,8 +420,6 @@ class MyrientTUI(App):
         if self.sort_column == column:
             self.sort_reverse = not self.sort_reverse
         self.sort_column = column
-        results_table = self.query_one(DataTable)
-        results_table.clear()
         self.do_search()
 
 
@@ -422,11 +429,8 @@ class MyrientTUI(App):
         """Search for items in the database matching the query."""
         self.current_offset = offset
         results_table = self.query_one(DataTable)
-
-        with contextlib.suppress(Exception):
-            results_table.remove_row("searching")
+        results_table.clear()
         results_table.add_row("Searching...", "-", "-", "-", "-", "-", key="searching")
-
 
         try:
             result_input = self.query_one("#results_per_page_input", Input)
@@ -497,23 +501,18 @@ class MyrientTUI(App):
         self.do_search(offset=self.current_offset)
 
 
-
-
     def _display_error(self, msg: str) -> None:
         """Show an error row and remove searching placeholder (runs on main thread)."""
         results_table = self.query_one(DataTable)
-        with contextlib.suppress(Exception):
-            results_table.remove_row("searching")
-        # Insert a single error row (first column holds message)
+        results_table.clear()
+
         results_table.add_row(f"Error: {msg}", "", "", "", "", "", key="error")
         logger.exception("Search failed: %s", msg)
 
     def _display_results(self, results: list) -> None:
         """Run on main thread: remove searching row and insert result rows."""
         results_table = self.query_one(DataTable)
-        # safely remove the searching placeholder (ignore if not present)
-        with contextlib.suppress(Exception):
-            results_table.remove_row("searching")
+        results_table.clear()
 
         def _cell(v: dict) -> str:
             if v is None:
